@@ -21,7 +21,7 @@ type Values map[interface{}]interface{}
 // construction.
 type ContextManager struct {
 	mtx    sync.Mutex
-	values map[uint]*ValueRecord
+	values []*ValueRecord
 }
 
 type ValueRecord struct {
@@ -33,7 +33,7 @@ type ValueRecord struct {
 // new ContextManager in the ContextManager registry which is used by the Go
 // method. ContextManagers are typically defined globally at package scope.
 func NewContextManager() *ContextManager {
-	mgr := &ContextManager{values: make(map[uint]*ValueRecord)}
+	mgr := &ContextManager{values: make([]*ValueRecord, 1024)}
 	mgrRegistryMtx.Lock()
 	defer mgrRegistryMtx.Unlock()
 	mgrRegistry[mgr] = true
@@ -65,8 +65,21 @@ func (m *ContextManager) SetValues(new_values Values, context_call func()) {
 	EnsureGoroutineId(func(gid uint) {
 		m.mtx.Lock()
 		var nested bool
-		state, found := m.values[gid]
-		if !found {
+		if gid >= uint(len(m.values)) {
+			// If the goroutine id is larger than the current values slice,
+			// we need to grow it to accommodate the new gid.
+			new_values_slice := make([]*ValueRecord, len(m.values)*2)
+			copy(new_values_slice, m.values)
+			m.values = new_values_slice
+		} else if m.values[gid] != nil {
+			// If the value already exists, we will mutate it.
+			nested = true
+		} else {
+			// Otherwise, we will create a new value record.
+			m.values[gid] = &ValueRecord{val: make(Values, len(new_values))}
+		}
+		state := m.values[gid]
+		if state == nil {
 			state = &ValueRecord{val: make(Values, len(new_values))}
 			m.values[gid] = state
 		} else if state.deleted {
@@ -78,18 +91,18 @@ func (m *ContextManager) SetValues(new_values Values, context_call func()) {
 		m.mtx.Unlock()
 
 		if nested {
-			mutated_keys := make([]interface{}, 0, len(new_values))
-			mutated_vals := make(Values, len(new_values))
-			for key, new_val := range new_values {
-				mutated_keys = append(mutated_keys, key)
-				if old_val, ok := state.val[key]; ok {
-					mutated_vals[key] = old_val
+			mutatedKeys := make([]interface{}, 0, len(new_values))
+			mutatedVals := make(Values, len(new_values))
+			for key, newVal := range new_values {
+				mutatedKeys = append(mutatedKeys, key)
+				if oldVal, ok := state.val[key]; ok {
+					mutatedVals[key] = oldVal
 				}
-				state.val[key] = new_val
+				state.val[key] = newVal
 			}
 			defer func() {
-				for _, key := range mutated_keys {
-					if val, ok := mutated_vals[key]; ok {
+				for _, key := range mutatedKeys {
+					if val, ok := mutatedVals[key]; ok {
 						state.val[key] = val
 					} else {
 						delete(state.val, key)
@@ -97,8 +110,8 @@ func (m *ContextManager) SetValues(new_values Values, context_call func()) {
 				}
 			}()
 		} else {
-			for key, new_val := range new_values {
-				state.val[key] = new_val
+			for key, newVal := range new_values {
+				state.val[key] = newVal
 			}
 			defer func() {
 				state.deleted = true
@@ -121,10 +134,10 @@ func (m *ContextManager) GetValue(key interface{}) (
 	}
 
 	m.mtx.Lock()
-	state, found := m.values[gid]
+	state := m.values[gid]
 	m.mtx.Unlock()
 
-	if !found {
+	if state == nil {
 		return nil, false
 	}
 	value, ok = state.val[key]
@@ -138,8 +151,8 @@ func (m *ContextManager) getValues() Values {
 	}
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-	state, _ := m.values[gid]
-	if state.deleted {
+	state := m.values[gid]
+	if state == nil || state.deleted {
 		return nil
 	}
 	return state.val
