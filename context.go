@@ -21,7 +21,7 @@ type Values map[interface{}]interface{}
 // construction.
 type ContextManager struct {
 	mtx    sync.Mutex
-	values map[uint]ValueRecord
+	values map[uint]*ValueRecord
 }
 
 type ValueRecord struct {
@@ -33,7 +33,7 @@ type ValueRecord struct {
 // new ContextManager in the ContextManager registry which is used by the Go
 // method. ContextManagers are typically defined globally at package scope.
 func NewContextManager() *ContextManager {
-	mgr := &ContextManager{values: make(map[uint]ValueRecord)}
+	mgr := &ContextManager{values: make(map[uint]*ValueRecord)}
 	mgrRegistryMtx.Lock()
 	defer mgrRegistryMtx.Unlock()
 	mgrRegistry[mgr] = true
@@ -62,45 +62,49 @@ func (m *ContextManager) SetValues(new_values Values, context_call func()) {
 		return
 	}
 
-	mutated_keys := make([]interface{}, 0, len(new_values))
-	mutated_vals := make(Values, len(new_values))
-
 	EnsureGoroutineId(func(gid uint) {
 		m.mtx.Lock()
+		var nested bool
 		state, found := m.values[gid]
 		if !found {
-			state.val = make(Values, len(new_values))
+			state = &ValueRecord{val: make(Values, len(new_values))}
 			m.values[gid] = state
 		} else if state.deleted {
+			state.val = make(Values, len(new_values))
 			state.deleted = false
+		} else {
+			nested = true
 		}
 		m.mtx.Unlock()
 
-		for key, new_val := range new_values {
-			mutated_keys = append(mutated_keys, key)
-			if old_val, ok := state.val[key]; ok {
-				mutated_vals[key] = old_val
-			}
-			state.val[key] = new_val
-		}
-
-		defer func() {
-			if !found {
-				m.mtx.Lock()
-				delete(m.values, gid)
-				state.deleted = true
-				m.mtx.Unlock()
-				return
-			}
-
-			for _, key := range mutated_keys {
-				if val, ok := mutated_vals[key]; ok {
-					state.val[key] = val
-				} else {
-					delete(state.val, key)
+		if nested {
+			mutated_keys := make([]interface{}, 0, len(new_values))
+			mutated_vals := make(Values, len(new_values))
+			for key, new_val := range new_values {
+				mutated_keys = append(mutated_keys, key)
+				if old_val, ok := state.val[key]; ok {
+					mutated_vals[key] = old_val
 				}
+				state.val[key] = new_val
 			}
-		}()
+			defer func() {
+				for _, key := range mutated_keys {
+					if val, ok := mutated_vals[key]; ok {
+						state.val[key] = val
+					} else {
+						delete(state.val, key)
+					}
+				}
+			}()
+		} else {
+			for key, new_val := range new_values {
+				state.val[key] = new_val
+			}
+			defer func() {
+				state.deleted = true
+				state.val = nil
+			}()
+		}
 
 		context_call()
 	})

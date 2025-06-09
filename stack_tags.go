@@ -142,6 +142,6 @@ func (m *ContextManager) preventInlining() {
 	// really don't want those two functions inlined by saying they could change
 	// at any time. assumes preventInlining doesn't get compiled out.
 	// this whole thing is probably overkill.
-	findPtr = m.values[0][0].(func() uintptr)
-	getStack = m.values[0][1].(func(int, int) ([]uintptr, int))
+	findPtr = m.values[0].val[0].(func() uintptr)
+	getStack = m.values[0].val[1].(func(int, int) ([]uintptr, int))
 }
