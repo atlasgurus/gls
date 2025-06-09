@@ -21,14 +21,19 @@ type Values map[interface{}]interface{}
 // construction.
 type ContextManager struct {
 	mtx    sync.Mutex
-	values map[uint]Values
+	values map[uint]ValueRecord
+}
+
+type ValueRecord struct {
+	val     Values
+	deleted bool
 }
 
 // NewContextManager returns a brand new ContextManager. It also registers the
 // new ContextManager in the ContextManager registry which is used by the Go
 // method. ContextManagers are typically defined globally at package scope.
 func NewContextManager() *ContextManager {
-	mgr := &ContextManager{values: make(map[uint]Values)}
+	mgr := &ContextManager{values: make(map[uint]ValueRecord)}
 	mgrRegistryMtx.Lock()
 	defer mgrRegistryMtx.Unlock()
 	mgrRegistry[mgr] = true
@@ -64,32 +69,35 @@ func (m *ContextManager) SetValues(new_values Values, context_call func()) {
 		m.mtx.Lock()
 		state, found := m.values[gid]
 		if !found {
-			state = make(Values, len(new_values))
+			state.val = make(Values, len(new_values))
 			m.values[gid] = state
+		} else if state.deleted {
+			state.deleted = false
 		}
 		m.mtx.Unlock()
 
 		for key, new_val := range new_values {
 			mutated_keys = append(mutated_keys, key)
-			if old_val, ok := state[key]; ok {
+			if old_val, ok := state.val[key]; ok {
 				mutated_vals[key] = old_val
 			}
-			state[key] = new_val
+			state.val[key] = new_val
 		}
 
 		defer func() {
 			if !found {
 				m.mtx.Lock()
 				delete(m.values, gid)
+				state.deleted = true
 				m.mtx.Unlock()
 				return
 			}
 
 			for _, key := range mutated_keys {
 				if val, ok := mutated_vals[key]; ok {
-					state[key] = val
+					state.val[key] = val
 				} else {
-					delete(state, key)
+					delete(state.val, key)
 				}
 			}
 		}()
@@ -115,7 +123,7 @@ func (m *ContextManager) GetValue(key interface{}) (
 	if !found {
 		return nil, false
 	}
-	value, ok = state[key]
+	value, ok = state.val[key]
 	return value, ok
 }
 
@@ -125,9 +133,12 @@ func (m *ContextManager) getValues() Values {
 		return nil
 	}
 	m.mtx.Lock()
+	defer m.mtx.Unlock()
 	state, _ := m.values[gid]
-	m.mtx.Unlock()
-	return state
+	if state.deleted {
+		return nil
+	}
+	return state.val
 }
 
 // Go preserves ContextManager values and Goroutine-local-storage across new
