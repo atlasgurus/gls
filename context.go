@@ -71,13 +71,8 @@ func (m *ContextManager) SetValues(new_values Values, context_call func()) {
 			new_values_slice := make([]*ValueRecord, len(m.values)*2)
 			copy(new_values_slice, m.values)
 			m.values = new_values_slice
-		} else if m.values[gid] != nil {
-			// If the value already exists, we will mutate it.
-			nested = true
-		} else {
-			// Otherwise, we will create a new value record.
-			m.values[gid] = &ValueRecord{val: make(Values, len(new_values))}
 		}
+
 		state := m.values[gid]
 		if state == nil {
 			state = &ValueRecord{val: make(Values, len(new_values))}
