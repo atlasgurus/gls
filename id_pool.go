@@ -6,7 +6,20 @@ package gls
 
 import (
 	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+var (
+	maxIDGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gls_id_pool_max_id",
+		Help: "The current maximum ID in the ID pool",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(maxIDGauge)
+}
 
 type idPool struct {
 	mtx      sync.Mutex
@@ -24,6 +37,7 @@ func (p *idPool) Acquire() (id uint) {
 	}
 	id = p.max_id
 	p.max_id++
+	maxIDGauge.Set(float64(p.max_id))
 	return id
 }
 
